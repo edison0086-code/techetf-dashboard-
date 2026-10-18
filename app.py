@@ -111,7 +111,7 @@ for sym in SYMBOLS:
         snapshots[sym]=build_snapshot(sym,pd.DataFrame(),now)
         snapshots[sym].error=raw[sym]['error'] or snapshots[sym].error
 
-st.caption(f'資料檢查時間（台灣）：{checked.astimezone(TW_TZ).strftime("%Y-%m-%d %H:%M")}　｜　行情通常為最新可得日 K，非即時逐筆報價')
+st.caption(f'資料檢查時間（台灣）：{checked.astimezone(TW_TZ).strftime("%Y-%m-%d %H:%M")}　｜　最新股價＝行情來源最近一根日 K 的 Close，可能尚未收盤；非逐筆即時報價')
 if now.astimezone(TW_TZ).year < 2027:
     st.info('目前為 **2026 年策略觀察期**；正式 15 年投入計畫預計 2027 年開始。本頁亮燈不代表 2026 年必須下單。')
 
@@ -137,7 +137,7 @@ with f3:
 
 if fear_error and not fear: st.caption(f'來源存取錯誤：{fear_error[:450]}')
 
-st.subheader('三檔 ETF｜最新收盤與週線 J')
+st.subheader('三檔 ETF｜最新股價、日 J 與週 J')
 cols=st.columns(3,gap='medium')
 for c,symbol in zip(cols,SYMBOLS):
     sn=snapshots[symbol]
@@ -145,9 +145,16 @@ for c,symbol in zip(cols,SYMBOLS):
         st.metric(sn.display,f'{sn.currency} {sn.price:,.2f}' if sn.price is not None else '無資料',
                   f'{sn.drawdown_pct:.2f}%（距 52 週高收盤）' if sn.drawdown_pct is not None else None,
                   delta_color='off')
-        st.caption(f'收盤日期：{sn.last_session or "未知"}｜完整週截至：{sn.weekly_close_date or "未知"}')
-        st.write('週線 J：',f'**{sn.weekly_j:.2f}**' if sn.weekly_j is not None else '**待確認**')
-        st.caption(f'上週 J：{sn.prior_weekly_j:.2f}' if sn.prior_weekly_j is not None else '上週 J：無資料')
+        st.caption(f'最新可得日 K：{sn.last_session or "未知"}｜此價格可能是交易中的未完成日 K，非逐筆即時報價')
+        st.metric('日線 J（最新可得日 K）', f'{sn.daily_j:.2f}' if sn.daily_j is not None else '待確認')
+        st.caption(f'上一交易日 J：{sn.prior_daily_j:.2f}' if sn.prior_daily_j is not None else '上一交易日 J：無資料')
+        st.metric('週線 J（本週最新估算）', f'{sn.week_estimated_j:.2f}' if sn.week_estimated_j is not None else '待確認')
+        if sn.week_is_in_progress:
+            st.warning(f'本週尚未收線｜估算資料截至 {sn.week_estimated_asof}；可能繼續變動，**不作正式週線觸發**。')
+        else:
+            st.caption(f'最近可得週線已完成｜資料截至 {sn.week_estimated_asof or "未知"}')
+        st.write('完整週線 J（策略確認用）：', f'**{sn.weekly_j:.2f}**' if sn.weekly_j is not None else '**待確認**')
+        st.caption(f'完整週截至：{sn.weekly_close_date or "未知"}｜上個完整週 J：{sn.prior_weekly_j:.2f}' if sn.prior_weekly_j is not None else f'完整週截至：{sn.weekly_close_date or "未知"}｜上個完整週 J：無資料')
         if sn.drawdown_pct is not None:
             st.caption('回檔採配息調整後價格' if sn.drawdown_adjusted else '缺調整後價格，原始價可能受除息影響')
         if sn.error: st.error(f'價格來源失敗：{sn.error[:180]}')
@@ -165,7 +172,9 @@ for sym in SYMBOLS:
     first_results[sym]=out
     status_rows.append({'標的':sn.display,'最新收盤':f'{sn.price:,.2f} {sn.currency}' if sn.price is not None else '—',
         '52 週回檔':f'{sn.drawdown_pct:.2f}%' if sn.drawdown_pct is not None else '—',
-        '週 J':f'{sn.weekly_j:.2f}' if sn.weekly_j is not None else '—',
+        '日 J':f'{sn.daily_j:.2f}' if sn.daily_j is not None else '—',
+        '本週估算 J':f'{sn.week_estimated_j:.2f}' if sn.week_estimated_j is not None else '—',
+        '完整週 J':f'{sn.weekly_j:.2f}' if sn.weekly_j is not None else '—',
         '第一批訊號':out['status'],
         '觸發原因':'；'.join(out['reasons']) if out['reasons'] else '—'})
 st.dataframe(pd.DataFrame(status_rows),hide_index=True,use_container_width=True)
@@ -179,7 +188,8 @@ else:
     st.info('QQQM 尚無可確認的第一批觸發訊號；請查看表格內其他資料是否因來源失效而待確認。')
 
 with st.expander('📐 週線 J 值如何計算？',expanded=False):
-    st.write('以**完整週 K** 的 9 週最高價／最低價算 RSV，K、D 採 1/3 平滑（初值 50），J = 3K − 2D。台股、美股按各自交易所時區判定完整週，進行中的本週不列入。')
+    st.write('日線 J、完整週線 J、本週估算週 J 都採 RSV(9)、K/D 各 1/3 平滑（初值 50）、J = 3K − 2D。日 J 使用 9 個交易日；週 J 使用 9 週。')
+    st.write('**完整週線 J**：僅納入已完成的交易週，用來判斷正式進場訊號。**本週估算 J**：把本週至最新可得交易日的日 OHLC 合成當週未完成週 K；每次更新都可能改變，僅供觀察。')
     st.write('不同券商的週線分組、配息調整方式、初值與價格來源可能使 J 略有差異；應固定使用本網站參數判斷，勿與不同參數的日線 J 混用。')
 
 st.subheader('📌 第二批 40%／第三批 30%')
@@ -264,7 +274,7 @@ st.caption('固定日期是年底前的「防踏空」截止規則，不是統�
 with st.expander('資料來源／限制與風險聲明',expanded=False):
     st.markdown('''- **價格**：[Yahoo Finance](https://finance.yahoo.com/) 公開 Chart 資料（QQQM、SMH、00935.TW）。資料可能有交易日延遲、調整價修正或被限制存取。
 - **恐懼指數**：[CNN Fear & Greed](https://www.cnn.com/markets/fear-and-greed) 網站使用的非官方資料端點；讀取失敗時才嘗試 [Fear & Greed Graph](https://fearandgreedgraph.com/data) 第三方備援，標明不同來源。
-- **週 J**：本站用完整週線 OHLC 自行計算（9、3、3；初值 50），不代表券商畫面上的週 J 必定完全一致。
+- **日 J／週 J**：本站以日 OHLC、週 OHLC 計算 KDJ（9、3、3；初值 50）。完整週線 J 才用於正式週線進場條件。本週估算 J 只是將本週已取得的日 K 組成未完成週 K，不能當作確認訊號。
 - **52 週回檔**：以最近 365 天收盤價為基準；優先使用 Yahoo「Adj Close」避免配息導致假性回檔。ETF 的現價卡片仍顯示原始收盤價。
 - **第二／第三批**：需要已執行第一批的實際資料。本版以 QQQM 作為組合級價格基準，若你要改成依各檔 ETF 獨立觸發，需再另行確定規則。
 - **資料斷線或超過 5 天**：對相應訊號顯示待確認；不得把空值當 0 或發出錯誤買點。

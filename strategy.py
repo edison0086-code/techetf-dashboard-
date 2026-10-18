@@ -25,11 +25,6 @@ class Snapshot:
     weekly_close_date: date | None
     daily: pd.DataFrame | None
     error: str | None = None
-    daily_j: float | None = None
-    prior_daily_j: float | None = None
-    week_estimated_j: float | None = None
-    week_estimated_asof: date | None = None
-    week_is_in_progress: bool = False
 
 
 def _j_values(weekly: pd.DataFrame, period: int = 9) -> pd.Series:
@@ -99,29 +94,8 @@ def build_snapshot(symbol: str, daily: pd.DataFrame, now: datetime) -> Snapshot:
     j_now = float(j.iloc[-1]) if len(j) else None
     j_prev = float(j.iloc[-2]) if len(j) >= 2 else None
     w_date = weekly.index[-1].date() if len(weekly) else None
-    # Latest daily J uses the newest available daily OHLC. The current
-    # exchange session might still be in progress at the data provider.
-    daily_js = _j_values(df).dropna()
-    daily_j = float(daily_js.iloc[-1]) if len(daily_js) else None
-    prior_daily_j = float(daily_js.iloc[-2]) if len(daily_js) >= 2 else None
-
-    # Preview J is the W-FRI candle INCLUDING this week's available sessions.
-    # It is only a preview while the exchange-local current week is unfinished.
-    estimated_weekly = df.resample('W-FRI').agg({
-        'Open':'first','High':'max','Low':'min','Close':'last'
-    }).dropna()
-    estimated_j_series = _j_values(estimated_weekly).dropna()
-    estimated_j = float(estimated_j_series.iloc[-1]) if len(estimated_j_series) else None
-    preview_friday = estimated_weekly.index[-1].date() if len(estimated_weekly) else None
-    in_progress = preview_friday is not None and preview_friday > end_of_week
-    # On a completed week, the preview is exactly the confirmed weekly J.
-    if not in_progress:
-        estimated_j = j_now
     return Snapshot(symbol, label, latest_price, currency, last_date, peak,
-                    drawdown, bool(adjusted), j_now, j_prev, w_date, df,
-                    daily_j=daily_j, prior_daily_j=prior_daily_j,
-                    week_estimated_j=estimated_j, week_estimated_asof=last_date,
-                    week_is_in_progress=in_progress)
+                    drawdown, bool(adjusted), j_now, j_prev, w_date, df)
 
 
 def age_days(last_date: date | None, now: datetime) -> int | None:
@@ -198,3 +172,23 @@ def next_stage(qqqm: Snapshot | None, fear: float | None, previous_fear: float |
 def portfolio_percentages(option: str) -> dict[str, float]:
     if option == '40／30／30': return {'QQQM':.40,'SMH':.30,'00935':.30}
     return {'QQQM':.50,'SMH':.25,'00935':.25}
+
+
+def kdj_details(daily: pd.DataFrame, now: datetime, symbol: str) -> dict:
+    """Daily J, partial-week J, completed-week J, consistent KDJ(9,3,3)."""
+    if daily is None or len(daily) < 80:
+        return {'daily_j':None,'partial_j':None,'complete_j':None,'daily_date':None,'completed_date':None}
+    df=daily.sort_index().dropna(subset=['Open','High','Low','Close'])
+    dj=_j_values(df).dropna()
+    cutoff=most_recent_complete_week_end(now,'TW' if symbol.endswith('.TW') else 'US')
+    weekly=df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last'}).dropna()
+    finished=weekly[weekly.index.date <= cutoff]
+    finished_j=_j_values(finished).dropna()
+    # one bar from current week as if closed at the latest daily close
+    partial=_j_values(weekly).dropna()
+    return {'daily_j':float(dj.iloc[-1]) if len(dj) else None,
+            'partial_j':float(partial.iloc[-1]) if len(partial) else None,
+            'complete_j':float(finished_j.iloc[-1]) if len(finished_j) else None,
+            'daily_date':df.index[-1].date(),
+            'completed_date':finished.index[-1].date() if len(finished) else None,
+            'partial_is_complete':df.index[-1].date() <= cutoff}

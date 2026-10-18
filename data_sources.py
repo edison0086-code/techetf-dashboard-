@@ -1,112 +1,88 @@
-"""Public market data retrieval, with explicitly attributable sources.
-
-Yahoo Finance chart and CNN Dataviz URLs are public *undocumented* endpoints.
-They may fail or change; failure MUST display missing data rather than a value.
-No live-trading or brokerage integration is included.
+"""Tiingo (US), FinMind/TWSE (TW); no Yahoo Finance calls.
+Returns daily RAW OHLC data. Latest = latest settled daily close (not real-time).
 """
-from __future__ import annotations
-from datetime import datetime, date, timezone
-from zoneinfo import ZoneInfo
-from typing import Optional
+from datetime import date, timedelta
 import requests
 import pandas as pd
 
-HEADERS = {
-    'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept':'application/json, text/plain, */*',
-    'Accept-Language':'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-}
-CNN = 'https://production.dataviz.cnn.io/index/fearandgreed/graphdata'
-FALLBACK = 'https://fearandgreedgraph.com/api/fear-greed'
+S = requests.Session()
+S.headers.update({'User-Agent':'personal-etf-monitor/2.0 (private research dashboard)','Accept':'application/json'})
 
+class DataError(Exception): pass
 
-def _get_json(url: str, timeout: int = 14, headers: Optional[dict] = None):
-    response = requests.get(url,timeout=timeout,headers=headers or HEADERS)
-    response.raise_for_status()
-    return response.json()
+def request_json(url, *, params=None):
+    r = S.get(url, params=params, timeout=18)
+    if r.status_code != 200:
+        raise DataError(f'HTTP {r.status_code} ({url.split("/")[2]})')
+    try: return r.json()
+    except ValueError as e: raise DataError('來源非 JSON') from e
 
+def normalize(frame, mapping, source):
+    df = pd.DataFrame(frame)
+    if df.empty: raise DataError(f'{source}: 沒有交易資料')
+    needed = [mapping[x] for x in ('date','Open','High','Low','Close')]
+    if any(x not in df.columns for x in needed): raise DataError(f'{source}: OHLC 欄位缺漏')
+    out = pd.DataFrame({'Date':pd.to_datetime(df[mapping['date']],errors='coerce').dt.tz_localize(None).dt.normalize()})
+    for k in ('Open','High','Low','Close'):
+        out[k] = pd.to_numeric(df[mapping[k]], errors='coerce')
+    out = out.dropna().set_index('Date').sort_index()
+    out = out[~out.index.duplicated(keep='last')]
+    out = out[(out[['Open','High','Low','Close']] > 0).all(axis=1)]
+    if len(out) < 80: raise DataError(f'{source}: 日K只有 {len(out)} 根，不足計算可靠的週J')
+    if (out['Low'] > out['High']).any(): raise DataError(f'{source}: 最高最低價不合理')
+    return out
 
-def get_price_history(symbol: str):
-    """Returns OHLC + Adj Close indexed by exchange-local calendar date."""
-    problems = []
-    for host in ('query1.finance.yahoo.com','query2.finance.yahoo.com'):
+def tiingo_history(symbol, token):
+    if not token: raise DataError('尚未設定 TIINGO_TOKEN')
+    start = (date.today()-timedelta(days=900)).isoformat()
+    rows = request_json(f'https://api.tiingo.com/tiingo/daily/{symbol}/prices',params={'startDate':start,'token':token})
+    if not isinstance(rows,list): raise DataError(f'Tiingo: {str(rows)[:120]}')
+    df = normalize(rows, {'date':'date','Open':'open','High':'high','Low':'low','Close':'close'},'Tiingo')
+    return df, 'Tiingo EOD（未還原原始OHLC）', 'https://www.tiingo.com/documentation/end-of-day'
+
+def finmind_history(token=''):
+    params={'dataset':'TaiwanStockPrice','data_id':'00935','start_date':(date.today()-timedelta(days=900)).isoformat()}
+    if token: params['token']=token
+    root=request_json('https://api.finmindtrade.com/api/v4/data',params=params)
+    if not isinstance(root,dict) or root.get('status') != 200:
+        raise DataError('FinMind 回傳異常：'+str(root.get('msg') if isinstance(root,dict) else root)[:160])
+    rows=root.get('data') or []
+    df=normalize(rows,{'date':'date','Open':'open','High':'max','Low':'min','Close':'close'},'FinMind')
+    return df,'FinMind TaiwanStockPrice','https://finmind.github.io/'
+
+def twse_history():
+    # Official TWSE STOCK_DAY: a month per request, with ROC date and commas.
+    # Fetch 30 monthly files sequentially; reserve this as failover, not on every refresh.
+    now=date.today(); first=now.replace(day=1)
+    parts=[]
+    for months_back in range(30,-1,-1):
+        y=first.year; m=first.month-months_back
+        while m<=0: m+=12; y-=1
+        url='https://www.twse.com.tw/exchangeReport/STOCK_DAY'
+        root=request_json(url,params={'response':'json','date':f'{y:04d}{m:02d}01','stockNo':'00935'})
+        if not isinstance(root,dict) or root.get('stat')!='OK' or not root.get('data'): continue
+        rows=[]
+        for values in root['data']:
+            try:
+                ry,rm,rd=(int(v) for v in str(values[0]).split('/'))
+                rows.append({'date':f'{ry+1911:04d}-{rm:02d}-{rd:02d}',
+                             'open':str(values[3]).replace(',',''),
+                             'high':str(values[4]).replace(',',''),
+                             'low':str(values[5]).replace(',',''),
+                             'close':str(values[6]).replace(',','')})
+            except (ValueError,IndexError): continue
+        parts.extend(rows)
+    df=normalize(parts,{'date':'date','Open':'open','High':'high','Low':'low','Close':'close'},'TWSE')
+    return df,'臺灣證券交易所 STOCK_DAY','https://www.twse.com.tw/'
+
+def get_price_history(symbol,tiingo_token='',finmind_token='',enable_twse=True):
+    errors=[]
+    sources=([lambda:tiingo_history(symbol,tiingo_token)] if symbol!='00935.TW' else
+             [lambda:finmind_history(finmind_token)] + ([twse_history] if enable_twse else []))
+    for fn in sources:
         try:
-            url = f'https://{host}/v8/finance/chart/{symbol}'
-            payload = _get_json(url + '?range=2y&interval=1d&events=div%2Csplits', timeout=16)
-            chart = payload.get('chart') or {}
-            if chart.get('error'):
-                raise RuntimeError(str(chart['error']))
-            result = (chart.get('result') or [None])[0]
-            if not result: raise RuntimeError('查無 chart.result')
-            timestamps = result.get('timestamp') or []
-            q = ((result.get('indicators') or {}).get('quote') or [None])[0]
-            if not q or not timestamps: raise RuntimeError('無交易日或 OHLC')
-            adj = ((result.get('indicators') or {}).get('adjclose') or [{}])[0].get('adjclose',[])
-            df = pd.DataFrame({'Open':q['open'],'High':q['high'],
-                               'Low':q['low'],'Close':q['close']},
-                              index=pd.to_datetime(timestamps,unit='s',utc=True))
-            if len(adj) == len(df): df['Adj Close'] = adj
-            exchange_tz = 'Asia/Taipei' if symbol.endswith('.TW') else 'America/New_York'
-            df.index = pd.DatetimeIndex(df.index.tz_convert(exchange_tz).date)
-            df = df[~df.index.duplicated(keep='last')].sort_index()
-            if df.dropna(subset=['Close']).shape[0] < 50:
-                raise RuntimeError('資料少於 50 根日 K')
-            return df, f'Yahoo Finance chart ({host})', None
-        except Exception as exc:
-            problems.append(f'{host}: {str(exc)[:160]}')
-    return pd.DataFrame(), 'Yahoo Finance', '；'.join(problems)
-
-
-def _from_cnn():
-    h = HEADERS | {
-        'Referer':'https://edition.cnn.com/markets/fear-and-greed',
-        'Origin':'https://edition.cnn.com',
-    }
-    root = _get_json(CNN,headers=h)
-    fg = root['fear_and_greed']
-    score = float(fg['score'])
-    if not 0 <= score <= 100: raise ValueError('CNN 分數超出正常範圍')
-    stamp = fg.get('timestamp')
-    if isinstance(stamp,(float,int)):
-        dt = datetime.fromtimestamp(stamp / (1000 if stamp > 1e11 else 1),tz=timezone.utc)
-    elif isinstance(stamp,str):
-        dt = datetime.fromisoformat(stamp.replace('Z','+00:00'))
-        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
-    else:
-        raise ValueError('CNN 未回傳資料時間，不使用無日期的訊號')
-    market_date = dt.astimezone(ZoneInfo('America/New_York')).date()
-    return {
-      'score':score,'previous':float(fg['previous_close']) if fg.get('previous_close') is not None else None,
-      'date':market_date,'timestamp':dt.isoformat(),
-      'rating':str(fg.get('rating','')),
-      'source':'CNN Fear & Greed','url':CNN,
-      'warning':None,
-    }
-
-
-def _from_fallback():
-    root = _get_json(FALLBACK)
-    dates = root.get('dates') or []
-    values = root.get('values') or []
-    if not dates or not values or len(dates)!=len(values):
-        raise ValueError('第三方 API 返回格式不符')
-    order = sorted(zip(dates,values),key=lambda x:x[0])
-    dateval, scoreval = order[-1]
-    score = float(scoreval)
-    if not 0 <= score <= 100: raise ValueError('第三方分數範圍錯誤')
-    prev = float(order[-2][1]) if len(order)>=2 else None
-    return {
-      'score':score,'previous':prev,'date':date.fromisoformat(dateval[:10]),
-      'timestamp':str(root.get('asOf') or dateval),
-      'rating':'','source':'Fear & Greed Graph（第三方備援）',
-      'url':FALLBACK,
-      'warning':'CNN 原站無法取得；目前使用第三方整理數據，務必再與 CNN 核對。',
-    }
-
-
-def get_fear_greed():
-    problems = []
-    for fetcher in (_from_cnn,_from_fallback):
-        try: return fetcher(), None
-        except Exception as exc: problems.append(f'{fetcher.__name__}: {str(exc)[:200]}')
-    return None, '；'.join(problems)
+            df,source,url=fn()
+            return df,source,url,None
+        except (requests.RequestException,DataError,ValueError,KeyError,TypeError) as exc:
+            errors.append(str(exc)[:200])
+    return pd.DataFrame(),'無可用來源','', '；'.join(errors)

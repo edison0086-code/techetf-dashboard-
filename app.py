@@ -75,7 +75,7 @@ st.caption(f'本頁更新檢查：{now.astimezone(TW):%Y-%m-%d %H:%M}（台灣�
 if now.astimezone(TW).year < 2027:
     st.info('2026 年屬於策略測試與訊號觀察期；原定正式投入從 2027 年起。')
 
-st.subheader('三檔 ETF｜最近收盤＋日 J＋本週暫估／完整週 J')
+st.subheader('三檔 ETF｜最新收盤價、日 J、本週暫估 J、上週 J')
 snaps={}; details={}
 for sym in SYMBOLS:
     df,source,url,error=data[sym]
@@ -93,17 +93,17 @@ for sym in SYMBOLS:
         c1,c2,c3,c4=st.columns(4)
         c1.metric('最近收盤價',f'{snap.price:,.2f} {snap.currency}' if snap.price is not None else '待確認')
         c2.metric('日 J（最新日K）',f'{extra["daily_j"]:.2f}' if extra['daily_j'] is not None else '待確認')
-        c3.metric('本週暫估週 J',f'{extra["partial_j"]:.2f}' if extra['partial_j'] is not None else '待確認')
-        c4.metric('已完成週 J',f'{extra["complete_j"]:.2f}' if extra['complete_j'] is not None else '待確認')
+        c3.metric('本週暫估 J',f'{extra["partial_j"]:.2f}' if extra['partial_j'] is not None else '尚無本週資料')
+        c4.metric('上週 J',f'{extra["complete_j"]:.2f}' if extra['complete_j'] is not None else '待確認')
         e1,e2,e3=st.columns(3)
         e1.metric('52 週最高收盤回檔',f'{snap.drawdown_pct:+.2f}%' if snap.drawdown_pct is not None else '待確認')
         e2.metric('近期最高收盤',f'{snap.high_52w:.2f}' if snap.high_52w is not None else '待確認')
         e3.metric('資料距今（曆日）',str(age_days(snap.last_session,now)))
-        st.caption(f'行情日期：{snap.last_session}｜完整週 J 截至：{extra["completed_date"]}｜來源：[{source}]({url})')
-        if extra['partial_is_complete']:
-            st.info('最新日K落在已完成週，暫估週 J 與完整週 J 可能相同。')
+        st.caption(f'行情日期：{snap.last_session}｜日 J 日期：{extra["daily_date"]}｜本週暫估 J 日期：{extra["partial_date"] or "無本週新日K"}｜上週 J 截至週：{extra["completed_date"]}｜來源：[{source}]({url})')
+        if extra['partial_j'] is None:
+            st.info('尚無本週新日 K：本週暫估 J 不顯示舊週數值；上週 J 保留為正式訊號。')
         else:
-            st.info('本週週 J 是截至最新日K的暫估值，週 K 尚未收盤，**不直接作為正式的週 J 觸發**。')
+            st.info('本週暫估 J 依本週最新日 K 計算，尚未完成，**不直接作為正式進場的週 J 觸發**。')
         if age_days(snap.last_session,now) is not None and age_days(snap.last_session,now)>5:
             st.warning('行情可能過期；不應用過期資料發出正式訊號。')
         with st.expander(f'{label} 最近 120 個交易日走勢與原始資料'):

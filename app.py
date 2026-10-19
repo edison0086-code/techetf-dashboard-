@@ -8,7 +8,7 @@ from data_sources import get_price_history
 from cnn_sources import fetch_cnn, CNN_PAGE
 from strategy import build_snapshot, kdj_details, first_stage, next_stage, portfolio_percentages, age_days
 
-st.set_page_config(page_title='科技ETF｜進場訊號儀表板 v2.1',page_icon='📈',layout='wide')
+st.set_page_config(page_title='科技ETF｜進場訊號儀表板 v3',page_icon='📈',layout='wide')
 TW=ZoneInfo('Asia/Taipei')
 now=datetime.now(timezone.utc)
 SYMBOLS=['QQQM','SMH','00935.TW']
@@ -18,10 +18,10 @@ def secret(name):
     except (FileNotFoundError,KeyError):return ''
 
 @st.cache_data(ttl=3600,show_spinner=False)
-def fetch_all(tiingo_key, finmind_key, clear_nonce=0):
+def fetch_all(massive_key, finmind_key, clear_nonce=0):
     out={}
     for sym in SYMBOLS:
-        out[sym]=get_price_history(sym,tiingo_key,finmind_key,enable_twse=True)
+        out[sym]=get_price_history(sym,massive_key,finmind_key,enable_twse=True)
     return out
 
 @st.cache_data(ttl=1800,show_spinner=False)
@@ -29,7 +29,7 @@ def cached_cnn():
     return fetch_cnn()
 
 st.title('📈 科技 ETF｜15 年進場監控')
-st.caption('主動擇時 × 被動指數選股 × 不賣出｜只供個人研究，不自動下單｜v2.1 Tiingo + FinMind + TWSE + CNN')
+st.caption('主動擇時 × 被動指數選股 × 不賣出｜只供個人研究，不自動下單｜v2.1 Massive + FinMind + TWSE + CNN')
 with st.sidebar:
     st.header('策略設定')
     profile=st.radio('目標比例',['50／25／25','40／30／30'])
@@ -64,9 +64,9 @@ with st.sidebar:
 if refresh:
     fetch_all.clear()
     cached_cnn.clear()
-keys=(secret('TIINGO_TOKEN'),secret('FINMIND_TOKEN'))
+keys=(secret('MASSIVE_API_KEY'),secret('FINMIND_TOKEN'))
 if not keys[0]:
-    st.error('尚未設定 TIINGO_TOKEN：QQQM／SMH 無法取得完整歷史日K。請到 Streamlit App Settings → Secrets 設定金鑰。')
+    st.error('尚未設定 MASSIVE_API_KEY：QQQM／SMH 無法取得完整歷史日K。請到 Streamlit App Settings → Secrets 設定金鑰。')
 
 with st.spinner('讀取最新可得日K與計算 J 值……'):
     data=fetch_all(*keys)

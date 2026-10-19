@@ -1,60 +1,35 @@
-# 科技 ETF 監控網頁 v2（Tiingo／FinMind／TWSE）
+# 科技 ETF 15 年進場監控 V3｜Massive + FinMind + TWSE + CNN
 
-用於 QQQM 50%、SMH 25%、00935 25% 的 15 年買進策略；亦可切換 40/30/30。不自動下單。
+本程式可直接部署在 Streamlit Community Cloud。QQQM 和 SMH 使用 Massive 股票日終 Aggregate API，00935 使用 FinMind，失敗時再使用臺灣證交所月資料；不依賴 Yahoo 或 Tiingo。
 
-## 1. 不需重新建立網站，更新現有 GitHub
+## 部署方法
 
-GitHub `edison0086-code/techetf-dashboard-` 專案：將本 ZIP 內的 `app.py`、`data_sources.py`、`strategy.py`、`requirements.txt`、`README.md`、`.streamlit/config.toml` 上傳或取代原有同名檔案。**不要把 ZIP 整包放上去**。檔案應位於根目錄，只有 `config.toml` 放在 `.streamlit/` 資料夾。
-
-## 2. 取得 API Key
-
-* Tiingo https://www.tiingo.com/ 註冊、查找 API Token。需要給 QQQM、SMH 使用。請確認個人用途及展示授權。
-* FinMind https://finmind.github.io/ 的 `TaiwanStockPrice` 可嘗試不填 token；若有 Token，可提高額度。
-* TWSE 公開日交易資料作 00935 的備援，無金鑰，但需要多個按月 API 請求，備援使用時可能較慢且被限流。
-
-## 3. 設定 Streamlit Secrets（不可放 GitHub）
-
-在 https://share.streamlit.io/ 進入 App → Settings → Secrets，貼入：
+1. 將壓縮包內的 `app.py`、`strategy.py`、`data_sources.py`、`cnn_sources.py`、`requirements.txt`、`.streamlit/config.toml` 放在 GitHub 專案相同的資料夾層級；請一次替換舊版，避免 import/signature 不相容。
+2. 在 Streamlit Cloud 對現有 App 開啟 **Settings → Secrets**，填入：
 
 ```toml
-TIINGO_TOKEN = "你的Tiingo金鑰"
+MASSIVE_API_KEY = "你已申請的 Massive API key"
 FINMIND_TOKEN = ""
 ```
 
-取得 FinMind Token 時才填第二項。儲存後重新啟動網站。注意：**不要上傳 `.streamlit/secrets.toml`** 到 GitHub，亦不要公開貼出 token。
+請勿在 GitHub 原始碼、截圖或對話中公開 API Key；也不要將實際 secrets.toml 上傳 GitHub。
+3. 重新啟動／等待自動部署，按「強制更新日收盤行情」。App 網址保留不變。
 
-## 4. 公開／私人權限
+## 指標與策略
 
-建議 Streamlit App 設為私人，GitHub Repo 也設為私人。私人不代表免除行情商條款；Tiingo 的個人方案與資料展示規範須自行確認。確保 Streamlit 仍有讀取私人 GitHub repo 的權限。
+- 最新可得的日終收盤價、日 J、本週未完成週 J 估算、已完成週 J、52 週最高收盤回檔。
+- KDJ(9,3,3)，K/D 從 50 開始遞迴計算；與第三方指標可能略有不同。
+- CNN 官方網頁未文件化端點自動讀取（可能失效），失敗可切換手動核對；過期不觸發訊號。
+- 第一批 30%：單一 ETF 回檔至少 10%，或 CNN <25 與該 ETF 已完成週 J <25（候選訊號）。請勿把單一標的訊號直接視為整體三檔觸發。
+- 第二批 40% 與第三批 30% 須輸入第一批實際買進日期及 QQQM 參考成交價；只顯示候選訊號，不下單。
+- 比例：QQQM/SMH/00935 可選 50/25/25、40/30/30。年度未提前買入的餘額，00935 九月官方除息交易日三檔同日買進。
 
-## 5. 指標和更新
+## 注意
 
-- 股價：各資料來源回傳的最近完整日 K 收盤價，**非盤中價**。Tiingo EOD 更新常晚於交易所收盤，應看「行情日期」。
-- 日 J：最新日 K 對 KDJ(9,3,3) 的計算。
-- 估算週 J：包含本週最新日 K 的尚未結束週線。
-- 已完成週 J：按交換市場週收盤時間判斷，正式訊號只用已完成週線。J = 3K − 2D，K、D 初值 50，RSV 以 9 根 K 棒計算。不同平台的初始化和還原方式可能不同。
-- 52 週回檔：原始收盤價（不計配息與拆分還原），**ETF 除息本身可能造成技術性下跌**，重大除息與拆分需手動核實。這不是總報酬回撤。
-- CNN 指數：此版採**人工查核並輸入**，避免不穩定的非官方 API 假訊號。未輸入時，情緒複合條件待確認，但價格條件可獨立檢查。
-- 資料快取 1 小時，側欄可強制更新。週末或不同市場假期會出現較舊的最近收盤價，超過期限時不作正式觸發。
+Massive Basic 為個人用途，使用與展示權限依供應商授權；建議使用私人 Streamlit App。
+免費 Stocks Basic 提供日終行情與兩年歷史、每分鐘 5 次 API 請求；首次上線需在你的 Streamlit 環境驗證 QQQM、SMH 的實際回傳。程式內不含任何真實金鑰。
+FinMind / TWSE 或 CNN 有可能因限制、限流而顯示無資料；顯示原因但不推測數值。所有資訊非投資建議。
 
-## 6. 重要限制
+## 測試
 
-本 App 不儲存交易紀錄；重新整理需再次輸入，這避免私人紀錄儲存在不持久的 Streamlit 雲端檔案中。第二、第三批判斷依實際第一批日期和成交參考價，並需要人工核對執行狀態。不提供自動推播或券商下單。
-
-## 7. 如果顯示「待確認」
-
-- QQQM/SMH 沒有數字：確認 `TIINGO_TOKEN`、Tiingo 使用權限與 Cloud 日誌。
-- 00935 沒有數字：FinMind 限流或未涵蓋；TWSE 後備資料請求可能過多，查看錯誤文字。
-- CNN 待確認：需手動核對並輸入 CNN 數字。
-- 第二批／第三批待確認：尚未記錄實際第一批成交狀態。
-
-公開端點、供應商定價與授權可能改變；本版本在本地做靜態及模擬資料測試，**尚未用你的 Tiingo Token 在 Streamlit 雲端端到端驗證**。
-
-## v2.1 新增：CNN 網頁數據自動抓取
-
-- 預設「自動（優先）」：嘗試讀取 CNN 網頁背後使用的 `production.dataviz.cnn.io` JSON 端點，取出 score、rating、timestamp、previous_close；快取 30 分鐘。**這不是 CNN 授權保證可用的公開 API，可能遭封鎖、限流或結構更改。** 如相關使用條款禁止此用途，請停止使用自動模式。
-- 自動讀取失敗時不會填假資料，也不會錯把未取得數據當「未符合」；請在側欄改選「手動核對」，並依據 https://edition.cnn.com/markets/fear-and-greed 的數值輸入。
-- 資料時間超過 5 曆日視為過期，不能觸發 CNN 相關訊號；個別 ETF 價格回檔訊號依然分開判斷。
-- 網站仍須自行將實際執行批次、成交日期記錄在外部，不會永久保存個人交易紀錄。
-
-**更新原有 v2**：替換 `app.py`、`README.md`，新增 `cnn_sources.py`；其他程式可保留原樣。整包替換亦可。已進行模擬測試；尚未在使用者的 Streamlit 主機驗證 CNN 端點連線及商業授權。
+`python -m pytest -q tests`

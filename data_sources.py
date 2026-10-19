@@ -32,13 +32,33 @@ def normalize(frame, mapping, source):
     if (out['Low'] > out['High']).any(): raise DataError(f'{source}: 最高最低價不合理')
     return out
 
-def tiingo_history(symbol, token):
-    if not token: raise DataError('尚未設定 TIINGO_TOKEN')
-    start = (date.today()-timedelta(days=900)).isoformat()
-    rows = request_json(f'https://api.tiingo.com/tiingo/daily/{symbol}/prices',params={'startDate':start,'token':token})
-    if not isinstance(rows,list): raise DataError(f'Tiingo: {str(rows)[:120]}')
-    df = normalize(rows, {'date':'date','Open':'open','High':'high','Low':'low','Close':'close'},'Tiingo')
-    return df, 'Tiingo EOD（未還原原始OHLC）', 'https://www.tiingo.com/documentation/end-of-day'
+def massive_history(symbol, token):
+    """Massive official daily aggregate bars; free Basic uses EOD US stocks."""
+    if not token:
+        raise DataError('尚未設定 MASSIVE_API_KEY（請到 Streamlit Secrets 設定）')
+    end=date.today()
+    start=end-timedelta(days=710)  # within free 2-year historical window
+    url=(f'https://api.massive.com/v2/aggs/ticker/{symbol}/range/1/day/'
+         f'{start.isoformat()}/{end.isoformat()}')
+    root=request_json(url,params={'apiKey':token,'adjusted':'false','sort':'asc','limit':5000})
+    if not isinstance(root,dict):
+        raise DataError('Massive: 回傳格式不正確')
+    if root.get('status') not in ('OK','DELAYED'):
+        raise DataError('Massive: '+str(root.get('error') or root.get('message') or root.get('status'))[:130])
+    records=root.get('results') or []
+    if not records:
+        raise DataError('Massive: 查無日 K 資料（請檢查股票代碼、免費方案權限）')
+    rows=[]
+    for row in records:
+        try:
+            # Daily aggregates are timestamped at midnight in US market timezone.
+            session_date=pd.to_datetime(row['t'],unit='ms',utc=True).tz_convert('America/New_York').date()
+            rows.append({'date':str(session_date),'open':row['o'],'high':row['h'],
+                         'low':row['l'],'close':row['c']})
+        except (KeyError,TypeError,ValueError,OverflowError):
+            continue
+    df=normalize(rows,{'date':'date','Open':'open','High':'high','Low':'low','Close':'close'},'Massive')
+    return df,'Massive Stocks EOD（原始 OHLC）','https://massive.com/docs/rest/stocks/aggregates/custom-bars'
 
 def finmind_history(token=''):
     params={'dataset':'TaiwanStockPrice','data_id':'00935','start_date':(date.today()-timedelta(days=900)).isoformat()}
@@ -75,9 +95,9 @@ def twse_history():
     df=normalize(parts,{'date':'date','Open':'open','High':'high','Low':'low','Close':'close'},'TWSE')
     return df,'臺灣證券交易所 STOCK_DAY','https://www.twse.com.tw/'
 
-def get_price_history(symbol,tiingo_token='',finmind_token='',enable_twse=True):
+def get_price_history(symbol,massive_key='',finmind_token='',enable_twse=True):
     errors=[]
-    sources=([lambda:tiingo_history(symbol,tiingo_token)] if symbol!='00935.TW' else
+    sources=([lambda:massive_history(symbol,massive_key)] if symbol!='00935.TW' else
              [lambda:finmind_history(finmind_token)] + ([twse_history] if enable_twse else []))
     for fn in sources:
         try:

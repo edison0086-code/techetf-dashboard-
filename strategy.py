@@ -175,20 +175,50 @@ def portfolio_percentages(option: str) -> dict[str, float]:
 
 
 def kdj_details(daily: pd.DataFrame, now: datetime, symbol: str) -> dict:
-    """Daily J, partial-week J, completed-week J, consistent KDJ(9,3,3)."""
+    """KDJ(9,3,3) using last daily close, current *unfinished* week, prior completed week.
+
+    No tentative value is returned until at least one daily bar belongs to a
+    new calendar trading week. Finished J is computed using only completed weeks.
+    The resample is anchored on Fridays; special exchange holidays may require
+    exchange-calendar-aware completion rules in future versions.
+    """
+    empty = {'daily_j': None, 'partial_j': None, 'complete_j': None,
+             'daily_date': None, 'partial_date': None,
+             'completed_date': None, 'partial_is_complete': False}
     if daily is None or len(daily) < 80:
-        return {'daily_j':None,'partial_j':None,'complete_j':None,'daily_date':None,'completed_date':None}
-    df=daily.sort_index().dropna(subset=['Open','High','Low','Close'])
-    dj=_j_values(df).dropna()
-    cutoff=most_recent_complete_week_end(now,'TW' if symbol.endswith('.TW') else 'US')
-    weekly=df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last'}).dropna()
-    finished=weekly[weekly.index.date <= cutoff]
-    finished_j=_j_values(finished).dropna()
-    # one bar from current week as if closed at the latest daily close
-    partial=_j_values(weekly).dropna()
-    return {'daily_j':float(dj.iloc[-1]) if len(dj) else None,
-            'partial_j':float(partial.iloc[-1]) if len(partial) else None,
-            'complete_j':float(finished_j.iloc[-1]) if len(finished_j) else None,
-            'daily_date':df.index[-1].date(),
-            'completed_date':finished.index[-1].date() if len(finished) else None,
-            'partial_is_complete':df.index[-1].date() <= cutoff}
+        return empty
+    df = daily.sort_index().dropna(subset=['Open', 'High', 'Low', 'Close'])
+    if len(df) < 80:
+        return empty
+    exchange = 'TW' if symbol.endswith('.TW') else 'US'
+    finished_cutoff = most_recent_complete_week_end(now, exchange)
+    df = df[df.index.date <= now.astimezone(TW_TZ if exchange == 'TW' else US_TZ).date()]
+    if df.empty:
+        return empty
+    latest_date = df.index[-1].date()
+    dj = _j_values(df).dropna()
+    weekly = df.resample('W-FRI').agg({'Open': 'first', 'High': 'max',
+                                       'Low': 'min', 'Close': 'last'}).dropna()
+    finished = weekly[weekly.index.date <= finished_cutoff]
+    finished_j = _j_values(finished).dropna()
+    last_completed_date = finished.index[-1].date() if len(finished) else None
+
+    # This is deliberately NOT just _j_values(weekly).iloc[-1]: that would
+    # repeat the last completed week's J on Mondays before new data arrives.
+    current = weekly[weekly.index.date > finished_cutoff]
+    partial_j = None
+    partial_date = None
+    if len(current) and latest_date > finished_cutoff:
+        evolving = pd.concat([finished, current])
+        calculated = _j_values(evolving).dropna()
+        if len(calculated):
+            partial_j = float(calculated.iloc[-1])
+            partial_date = latest_date
+
+    return {'daily_j': float(dj.iloc[-1]) if len(dj) else None,
+            'partial_j': partial_j,
+            'complete_j': float(finished_j.iloc[-1]) if len(finished_j) else None,
+            'daily_date': latest_date,
+            'partial_date': partial_date,
+            'completed_date': last_completed_date,
+            'partial_is_complete': False}

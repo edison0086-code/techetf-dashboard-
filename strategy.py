@@ -25,6 +25,10 @@ class Snapshot:
     weekly_close_date: date | None
     daily: pd.DataFrame | None
     error: str | None = None
+    high_52w_date: date | None = None
+    year_high: float | None = None
+    year_high_date: date | None = None
+    year_drawdown_pct: float | None = None
 
 
 def _j_values(weekly: pd.DataFrame, period: int = 9) -> pd.Series:
@@ -82,6 +86,14 @@ def build_snapshot(symbol: str, daily: pd.DataFrame, now: datetime) -> Snapshot:
     peak = float(trailing.max()) if len(trailing) else None
     close_for_drawdown = float(price_series.iloc[-1]) if len(price_series) else None
     drawdown = 100 * (close_for_drawdown / peak - 1) if peak and close_for_drawdown else None
+    high_52w_date = trailing.idxmax().date() if len(trailing) else None
+    # Calendar-year high: reset at Jan 1 of the LAST OBSERVED TRADING DAY.
+    # Use the same original/adjusted close series as the existing 52-week metric.
+    current_year = price_series[price_series.index.year == last_date.year]
+    year_high = float(current_year.max()) if len(current_year) else None
+    year_high_date = current_year.idxmax().date() if len(current_year) else None
+    year_drawdown_pct = (100 * (close_for_drawdown / year_high - 1)
+                         if year_high and close_for_drawdown else None)
 
     # A completed trading week includes the last available exchange session of
     # that week, but the current trading week is excluded until its Fri close.
@@ -95,7 +107,9 @@ def build_snapshot(symbol: str, daily: pd.DataFrame, now: datetime) -> Snapshot:
     j_prev = float(j.iloc[-2]) if len(j) >= 2 else None
     w_date = weekly.index[-1].date() if len(weekly) else None
     return Snapshot(symbol, label, latest_price, currency, last_date, peak,
-                    drawdown, bool(adjusted), j_now, j_prev, w_date, df)
+                    drawdown, bool(adjusted), j_now, j_prev, w_date, df,
+                    high_52w_date=high_52w_date, year_high=year_high,
+                    year_high_date=year_high_date, year_drawdown_pct=year_drawdown_pct)
 
 
 def age_days(last_date: date | None, now: datetime) -> int | None:

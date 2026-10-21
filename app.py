@@ -8,7 +8,7 @@ from data_sources import get_price_history
 from cnn_sources import fetch_cnn, CNN_PAGE
 from strategy import build_snapshot, kdj_details, first_stage, next_stage, portfolio_percentages, age_days
 
-st.set_page_config(page_title='科技ETF｜進場訊號儀表板 v3',page_icon='📈',layout='wide')
+st.set_page_config(page_title='科技ETF｜進場訊號儀表板 v3.2',page_icon='📈',layout='wide')
 TW=ZoneInfo('Asia/Taipei')
 now=datetime.now(timezone.utc)
 SYMBOLS=['QQQM','SMH','00935.TW']
@@ -29,7 +29,7 @@ def cached_cnn():
     return fetch_cnn()
 
 st.title('📈 科技 ETF｜15 年進場監控')
-st.caption('主動擇時 × 被動指數選股 × 不賣出｜只供個人研究，不自動下單｜v2.1 Massive + FinMind + TWSE + CNN')
+st.caption('主動擇時 × 被動指數選股 × 不賣出｜只供個人研究，不自動下單｜V3.2 Massive + FinMind + TWSE + CNN')
 with st.sidebar:
     st.header('策略設定')
     profile=st.radio('目標比例',['50／25／25','40／30／30'])
@@ -97,8 +97,13 @@ for sym in SYMBOLS:
         c4.metric('上週 J',f'{extra["complete_j"]:.2f}' if extra['complete_j'] is not None else '待確認')
         e1,e2,e3=st.columns(3)
         e1.metric('52 週最高收盤回檔',f'{snap.drawdown_pct:+.2f}%' if snap.drawdown_pct is not None else '待確認')
-        e2.metric('近期最高收盤',f'{snap.high_52w:.2f}' if snap.high_52w is not None else '待確認')
+        e2.metric(f'{snap.last_session.year} 年最高收盤回檔' if snap.last_session else '當年度最高收盤回檔',
+                  f'{snap.year_drawdown_pct:+.2f}%' if snap.year_drawdown_pct is not None else '待確認')
         e3.metric('資料距今（曆日）',str(age_days(snap.last_session,now)))
+        h1,h2=st.columns(2)
+        h1.caption(f'52 週高點：{snap.high_52w:,.2f}｜日期：{snap.high_52w_date}' if snap.high_52w is not None else '52 週高點：待確認')
+        h2.caption(f'{snap.last_session.year} 年高點：{snap.year_high:,.2f}｜日期：{snap.year_high_date}' if snap.year_high is not None and snap.last_session else '當年度高點：待確認')
+        st.caption('高點與回檔採同一價格序列（如可用則採調整收盤價）；若有配息調整，數值可能不同於未調整的最新成交收盤價。當年度以最近行情的交易年份計算。')
         st.caption(f'行情日期：{snap.last_session}｜日 J 日期：{extra["daily_date"]}｜本週暫估 J 日期：{extra["partial_date"] or "無本週新日K"}｜上週 J 截至週：{extra["completed_date"]}｜來源：[{source}]({url})')
         if extra['partial_j'] is None:
             st.info('尚無本週新日 K：本週暫估 J 不顯示舊週數值；上週 J 保留為正式訊號。')
